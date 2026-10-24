@@ -1,144 +1,152 @@
-from io import BytesIO
-from pathlib import Path
-
-from fastapi import FastAPI, File, HTTPException, UploadFile
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi import FastAPI, File, UploadFile
+from fastapi.responses import HTMLResponse
 from PIL import Image
-from PIL.ExifTags import TAGS
+from io import BytesIO
 
-app = FastAPI(title="OriginScan AI API", version="0.2.0")
+app = FastAPI(title="OriginScan AI")
 
-# For a public deployment, replace "*" with your exact frontend origin.
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=False,
-    allow_methods=["GET", "POST"],
-    allow_headers=["*"],
-)
+HTML_PAGE = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OriginScan AI</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background: #0b1020;
+            color: white;
+            text-align: center;
+            padding: 30px 15px;
+        }
+        .container {
+            max-width: 500px;
+            margin: 40px auto;
+            padding: 25px;
+            background: #171f35;
+            border-radius: 16px;
+        }
+        h1 { color: #54e6b1; }
+        input, button {
+            margin: 15px 0;
+            padding: 12px;
+            max-width: 100%;
+        }
+        button {
+            background: #54e6b1;
+            border: none;
+            border-radius: 8px;
+            font-weight: bold;
+            cursor: pointer;
+        }
+        #preview {
+            max-width: 100%;
+            max-height: 300px;
+            margin-top: 15px;
+            border-radius: 10px;
+            display: none;
+        }
+        #result {
+            margin-top: 20px;
+            overflow-wrap: anywhere;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>OriginScan AI</h1>
+        <p>Upload an image to inspect it.</p>
 
-MAX_BYTES = 25 * 1024 * 1024
-IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
-VIDEO_EXTENSIONS = {".mp4", ".mov", ".webm", ".m4v"}
-ALLOWED_EXTENSIONS = IMAGE_EXTENSIONS | VIDEO_EXTENSIONS
+        <input type="file" id="imageInput" accept="image/*">
+        <br>
+        <img id="preview" alt="Selected image preview">
+        <br>
+        <button onclick="uploadImage()">Analyze Image</button>
+        <div id="result"></div>
+    </div>
 
-AI_KEYWORDS = [
-    "midjourney", "dall-e", "dalle", "stable diffusion", "stablediffusion",
-    "firefly", "imagen", "gemini", "flux", "leonardo", "novelai",
-    "comfyui", "automatic1111", "sdxl", "openai", "ai generated",
-]
+    <script>
+        const input = document.getElementById("imageInput");
+        const preview = document.getElementById("preview");
+        const result = document.getElementById("result");
 
+        input.addEventListener("change", function() {
+            const file = input.files[0];
 
-@app.get("/")
-def root():
-    return {"name": "OriginScan AI API", "status": "starter", "docs": "/docs"}
+            if (!file) return;
 
+            preview.src = URL.createObjectURL(file);
+            preview.style.display = "block";
+            result.textContent = "";
+        });
 
-@app.get("/health")
-def health():
-    return {"status": "ok"}
+        async function uploadImage() {
+            const file = input.files[0];
 
+            if (!file) {
+                result.textContent = "Please select an image first.";
+                return;
+            }
 
-def inspect_image(content: bytes):
-    signals = []
-    ai_hits = []
-    has_camera_info = False
+            const formData = new FormData();
+            formData.append("file", file);
 
-    try:
-        img = Image.open(BytesIO(content))
-        signals.append(f"Image format: {img.format}, size {img.width}x{img.height}")
+            result.textContent = "Uploading image...";
 
-        text_blobs = []
-        exif = img.getexif()
-        exif_map = {}
-        for tag_id, value in exif.items():
-            exif_map[TAGS.get(tag_id, tag_id)] = value
+            try {
+                const response = await fetch("/analyze", {
+                    method: "POST",
+                    body: formData
+                });
 
-        for key, value in img.info.items():
-            if isinstance(value, (str, bytes)):
-                text = value.decode("utf-8", "ignore") if isinstance(value, bytes) else value
-                text_blobs.append(f"{key} {text}")
+                const data = await response.json();
 
-        make = exif_map.get("Make")
-        model = exif_map.get("Model")
-        software = exif_map.get("Software")
-        taken = exif_map.get("DateTime")
+                if (!response.ok) {
+                    throw new Error(data.detail || "Upload failed");
+                }
 
-        if make or model:
-            has_camera_info = True
-            signals.append(f"Camera info found: {make or ''} {model or ''}".strip())
-        else:
-            signals.append("No camera make or model in metadata.")
+                result.textContent =
+                    "Image uploaded successfully. Format: " +
+                    data.format + ", Dimensions: " +
+                    data.width + " × " + data.height +
+                    ". AI detection is not enabled yet.";
 
-        if software:
-            signals.append(f"Software tag: {software}")
-            text_blobs.append(str(software))
-        if taken:
-            signals.append(f"Date in metadata: {taken}")
-        if not exif_map:
-            signals.append("No EXIF metadata found (social apps often strip it from real photos too).")
+            } catch (error) {
+                result.textContent = "Error: " + error.message;
+            }
+        }
+    </script>
+</body>
+</html>
+"""
 
-        combined = " ".join(text_blobs).lower()
-        for word in AI_KEYWORDS:
-            if word in combined:
-                ai_hits.append(word)
-
-    except Exception:
-        signals.append("Could not read image metadata.")
-
-    return signals, ai_hits, has_camera_info
-
+@app.get("/", response_class=HTMLResponse)
+async def home():
+    return HTML_PAGE
 
 @app.post("/analyze")
-async def analyze(file: UploadFile = File(...)):
-    filename = file.filename or "upload"
-    ext = Path(filename).suffix.lower()
-    if ext not in ALLOWED_EXTENSIONS:
-        raise HTTPException(status_code=415, detail="Unsupported file type.")
-    content = await file.read(MAX_BYTES + 1)
-    if not content:
-        raise HTTPException(status_code=400, detail="The uploaded file is empty.")
-    if len(content) > MAX_BYTES:
-        raise HTTPException(status_code=413, detail="File exceeds the 25 MB limit.")
+async def analyze_image(file: UploadFile = File(...)):
+    if not file.content_type or not file.content_type.startswith("image/"):
+        return {"detail": "Please upload a valid image file."}
 
-    media_type = "image" if ext in IMAGE_EXTENSIONS else "video"
-    signals = [f"File extension: {ext}", f"Media type: {media_type}"]
+    contents = await file.read()
 
-    if media_type == "image":
-        img_signals, ai_hits, has_camera = inspect_image(content)
-        signals.extend(img_signals)
+    if len(contents) > 10 * 1024 * 1024:
+        return {"detail": "Image must be smaller than 10 MB."}
 
-        if ai_hits:
-            verdict = "AI signs found"
-            summary = (
-                "The file's metadata mentions AI tools: "
-                + ", ".join(sorted(set(ai_hits)))
-                + ". This is a strong clue, but metadata can be edited."
-            )
-        elif has_camera:
-            verdict = "Camera info present"
-            summary = (
-                "The file carries camera details, which is typical of real photos. "
-                "This is a clue, not proof, because metadata can be faked."
-            )
-        else:
-            verdict = "Inconclusive"
-            summary = (
-                "No camera details and no AI tool names were found in the metadata. "
-                "That does not show whether the image is real or AI-generated."
-            )
-    else:
-        verdict = "Inconclusive"
-        summary = "Video analysis is not available yet, only the upload was validated."
+    try:
+        image = Image.open(BytesIO(contents))
+        image.verify()
 
-    signals.append("No pixel-level AI detection model has been run yet.")
+        image = Image.open(BytesIO(contents))
 
-    return {
-        "filename": filename,
-        "media_type": media_type,
-        "size_bytes": len(content),
-        "verdict": verdict,
-        "summary": summary,
-        "signals": signals,
-        "confidence": None,
-            }
+        return {
+            "filename": file.filename,
+            "format": image.format,
+            "width": image.width,
+            "height": image.height
+        }
+
+    except Exception:
+        return {"detail": "The uploaded file is not a valid image."}
