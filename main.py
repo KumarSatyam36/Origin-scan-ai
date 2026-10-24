@@ -1,240 +1,68 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException
-from fastapi.responses import HTMLResponse
-from io import BytesIO
-from PIL import Image
-
-app = FastAPI(
-    title="OriginScan AI",
-    description="AI Image Inspection",
-    version="1.0.0"
-)
-
-HTML = """
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>OriginScan AI</title>
-    <style>
-        * { box-sizing: border-box; }
-
-        body {
-            margin: 0;
-            padding: 20px;
-            background: #080d19;
-            color: white;
-            font-family: Arial, sans-serif;
-        }
-
-        .container {
-            max-width: 520px;
-            margin: 40px auto;
-            padding: 25px;
-            background: #131c2e;
-            border-radius: 18px;
-            border: 1px solid #26344b;
-        }
-
-        h1 {
-            color: #57e6b1;
-            text-align: center;
-        }
-
-        p {
-            color: #b5c2d6;
-            text-align: center;
-        }
-
-        input {
-            width: 100%;
-            margin: 20px 0;
-            padding: 14px;
-            background: #202c42;
-            color: white;
-            border: 1px solid #57e6b1;
-            border-radius: 10px;
-        }
-
-        button {
-            width: 100%;
-            padding: 15px;
-            background: #57e6b1;
-            color: #08111b;
-            font-size: 16px;
-            font-weight: bold;
-            border: none;
-            border-radius: 9px;
-        }
-
-        #preview {
-            display: none;
-            max-width: 100%;
-            max-height: 350px;
-            margin: 15px auto;
-            border-radius: 10px;
-        }
-
-        #result {
-            margin-top: 20px;
-            padding: 12px;
-            overflow-wrap: anywhere;
-            line-height: 1.7;
-        }
-    </style>
-</head>
-
-<body>
-    <div class="container">
-        <h1>OriginScan AI</h1>
-        <p>Inspect your image in seconds.</p>
-
-        <input id="file" type="file" accept="image/*">
-
-        <img id="preview" alt="Selected image preview">
-
-        <button id="analyze">Analyze Image</button>
-
-        <div id="result"></div>
-
-        <p>
-            Image inspection is available.
-            AI-origin detection is not yet connected.
-        </p>
-    </div>
-
-    <script>
-        const fileInput = document.getElementById("file");
-        const preview = document.getElementById("preview");
-        const result = document.getElementById("result");
-
-        fileInput.addEventListener("change", () => {
-            const file = fileInput.files[0];
-
-            if (!file) {
-                preview.style.display = "none";
-                return;
-            }
-
-            preview.src = URL.createObjectURL(file);
-            preview.style.display = "block";
-            result.textContent = "";
-        });
-
-        document.getElementById("analyze").addEventListener(
-            "click", async () => {
-                const file = fileInput.files[0];
-
-                if (!file) {
-                    result.textContent = "Please select an image first.";
-                    return;
-                }
-
-                result.textContent = "Analyzing image...";
-
-                const formData = new FormData();
-                formData.append("file", file);
-
-                try {
-                    const response = await fetch("/analyze", {
-                        method: "POST",
-                        body: formData
-                    });
-
-                    const data = await response.json();
-
-                    if (!response.ok) {
-                        throw new Error(
-                            data.detail || "Analysis failed."
-                        );
-                    }
-
-                    result.textContent =
-                        "Filename: " + data.filename +
-                        " | Format: " + data.format +
-                        " | Dimensions: " + data.width + " × " +
-                        data.height +
-                        " | Size: " + data.size_kb + " KB";
-
-                } catch (error) {
-                    result.textContent = "Error: " + error.message;
-                }
-            }
-        );
-    </script>
-</body>
-</html>
-"""
-
-
-@app.get("/", response_class=HTMLResponse)
-async def home():
-    return HTML
-
-
-@app.get("/health")
-async def health():
-    return {"status": "ok", "app": "OriginScan AI"}
-
-
 import os
 import httpx
-from fastapi import FastAPI, File, HTTPException, UploadFile
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI, File, UploadFile, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI()
 
-# Retrieve the API token from environment variables
-ORIGIN_API_TOKEN = os.getenv("ORIGIN_API_TOKEN")
+# Enable CORS for your GitHub Pages frontend
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
+# Fetch Sightengine API credentials from environment variables
+SIGHTENGINE_API_USER = os.getenv("SIGHTENGINE_API_USER")
+SIGHTENGINE_API_SECRET = os.getenv("SIGHTENGINE_API_SECRET")
+
+@app.get("/")
+def read_root():
+    return {"status": "ok", "message": "OriginScan AI Backend is running"}
 
 @app.post("/analyze")
-async def analyze(file: UploadFile = File(...)):
-  contents = await file.read()
-
-  if not contents:
-    raise HTTPException(status_code=400, detail="No file uploaded.")
-
-  # Example integration using an external AI detection API
-  # Replace the URL and payload structure with your actual AI detection provider's endpoint
-  api_url = "https://api.example.com/v1/detect"
-  headers = {
-      "Authorization": f"Bearer {ORIGIN_API_TOKEN}",
-  }
-
-  ai_detection_result = {
-      "is_ai_generated": False,
-      "confidence": 0.0,
-      "status": "Not connected",
-  }
-
-  if ORIGIN_API_TOKEN:
-    try:
-      async with httpx.AsyncClient() as client:
-        files = {"file": (file.filename, contents, file.content_type)}
-        response = await client.post(
-            api_url, headers=headers, files=files, timeout=30.0
+async def analyze_media(file: UploadFile = File(...)):
+    if not SIGHTENGINE_API_USER or not SIGHTENGINE_API_SECRET:
+        raise HTTPException(
+            status_code=500,
+            detail="API credentials not configured on backend."
         )
-        if response.status_code == 200:
-          data = response.json()
-          ai_detection_result = {
-              "is_ai_generated": data.get("is_ai_generated", False),
-              "confidence": data.get("confidence", 0.0),
-              "status": "Connected",
-          }
-        else:
-          ai_detection_result["status"] = (
-              f"API Error: {response.status_code}"
-          )
-    except Exception as e:
-      ai_detection_result["status"] = f"Connection failed: {str(e)}"
-  else:
-    ai_detection_result["status"] = "API token missing"
 
-  return {
-      "filename": file.filename,
-      "format": file.content_type,
-      "size": len(contents),
-      "ai_detection": ai_detection_result,
-  }
+    # Read file content from upload
+    file_bytes = await file.read()
+
+    # Call Sightengine Deepfake/AI-generated detection API
+    async with httpx.AsyncClient() as client:
+        try:
+            response = await client.post(
+                "https://api.sightengine.com/1.0/check.json",
+                data={
+                    "models": "genai",  # Checks for AI-generated / deepfake images
+                    "api_user": SIGHTENGINE_API_USER,
+                    "api_secret": SIGHTENGINE_API_SECRET,
+                },
+                files={"media": (file.filename, file_bytes, file.content_type)}
+            )
+            data = response.json()
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Error contacting forensic service: {str(e)}")
+
+    if response.status_code != 200 or data.get("status") != "success":
+        raise HTTPException(status_code=400, detail=data.get("error", {}).get("message", "Analysis failed"))
+
+    # Extract score from Sightengine response
+    # 'genai' score ranges from 0.0 (real) to 1.0 (AI generated)
+    ai_score = data.get("type", {}).get("ai_generated", 0.0)
+    is_ai = ai_score > 0.5
+
+    return {
+        "is_ai_generated": is_ai,
+        "confidence_score": round(ai_score * 100, 2),
+        "details": {
+            "ai_generated_probability": ai_score,
+            "raw_response": data
+        }
+    }
     
