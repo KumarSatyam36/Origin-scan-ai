@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Inspect media for signals that may help assess AI generation or editing.">
+  <title>OriginScan AI — Media Analysis</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <main class="shell">
+    <nav class="nav"><div class="brand"><span class="mark">O</span> OriginScan <span class="ai">AI</span></div><span class="pill">EARLY ACCESS</span></nav>
+    <section class="hero">
+      <p class="eyebrow">MEDIA TRANSPARENCY TOOL</p>
+      <h1>Look closer.<br><span>Question the source.</span></h1>
+      <p class="sub">Inspect an image or video for available signals. Results are indicators—not proof of authenticity.</p>
+    </section>
+    <section class="panel">
+      <label class="drop" id="dropzone" for="media">
+        <span class="upload-icon">↑</span>
+        <strong>Drop your image or video here</strong>
+        <span>or tap to browse your device</span>
+        <small>JPG, PNG, WEBP, MP4, MOV, WEBM · Max 25 MB</small>
+        <input id="media" type="file" accept="image/*,video/mp4,video/quicktime,video/webm">
+      </label>
+      <div class="file-row" id="file-row" hidden>
+        <div><strong id="file-name"></strong><small id="file-size"></small></div>
+        <button id="remove" class="text-button" type="button">Remove</button>
+      </div>
+      <button id="analyze" class="primary" disabled>Analyze media <span>→</span></button>
+      <p class="privacy">Your file should only be uploaded to a backend you trust. Avoid submitting sensitive or private media.</p>
+    </section>
+    <section id="result" class="result" hidden aria-live="polite">
+      <div class="result-head"><span class="result-dot"></span><div><p class="eyebrow">PRELIMINARY REPORT</p><h2 id="result-title">Inconclusive</h2></div></div>
+      <p id="result-copy"></p>
+      <ul id="signals"></ul>
+      <p class="disclaimer">This starter does not include a validated AI-media detection model. It cannot establish whether a file is original, AI-generated, or edited.</p>
+    </section>
+    <footer><span>OriginScan AI</span><span>Evidence over assumptions.</span></footer>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>
