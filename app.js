@@ -1,4 +1,4 @@
-const API_BASE = "http://127.0.0.1:8000";
+const API_BASE = "https://origin-scan-ai.onrender.com";
 
 const input = document.getElementById("media");
 const analyze = document.getElementById("analyze");
