@@ -177,44 +177,64 @@ async def health():
     return {"status": "ok", "app": "OriginScan AI"}
 
 
+import os
+import httpx
+from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi.responses import HTMLResponse
+
+app = FastAPI()
+
+# Retrieve the API token from environment variables
+ORIGIN_API_TOKEN = os.getenv("ORIGIN_API_TOKEN")
+
+
 @app.post("/analyze")
 async def analyze(file: UploadFile = File(...)):
-    if not file.content_type or not file.content_type.startswith("image/"):
-        raise HTTPException(
-            status_code=400,
-            detail="Please upload an image file."
-        )
+  contents = await file.read()
 
-    contents = await file.read()
+  if not contents:
+    raise HTTPException(status_code=400, detail="No file uploaded.")
 
-    if not contents:
-        raise HTTPException(
-            status_code=400,
-            detail="The uploaded file is empty."
-        )
+  # Example integration using an external AI detection API
+  # Replace the URL and payload structure with your actual AI detection provider's endpoint
+  api_url = "https://api.example.com/v1/detect"
+  headers = {
+      "Authorization": f"Bearer {ORIGIN_API_TOKEN}",
+  }
 
-    if len(contents) > 10 * 1024 * 1024:
-        raise HTTPException(
-            status_code=413,
-            detail="Maximum image size is 10 MB."
-        )
+  ai_detection_result = {
+      "is_ai_generated": False,
+      "confidence": 0.0,
+      "status": "Not connected",
+  }
 
+  if ORIGIN_API_TOKEN:
     try:
-        image = Image.open(BytesIO(contents))
-        image.verify()
-
-        image = Image.open(BytesIO(contents))
-
-        return {
-            "filename": file.filename or "image",
-            "format": image.format or "Unknown",
-            "width": image.width,
-            "height": image.height,
-            "size_kb": round(len(contents) / 1024, 2)
-        }
-
-    except Exception:
-        raise HTTPException(
-            status_code=400,
-            detail="Invalid or unsupported image."
+      async with httpx.AsyncClient() as client:
+        files = {"file": (file.filename, contents, file.content_type)}
+        response = await client.post(
+            api_url, headers=headers, files=files, timeout=30.0
         )
+        if response.status_code == 200:
+          data = response.json()
+          ai_detection_result = {
+              "is_ai_generated": data.get("is_ai_generated", False),
+              "confidence": data.get("confidence", 0.0),
+              "status": "Connected",
+          }
+        else:
+          ai_detection_result["status"] = (
+              f"API Error: {response.status_code}"
+          )
+    except Exception as e:
+      ai_detection_result["status"] = f"Connection failed: {str(e)}"
+  else:
+    ai_detection_result["status"] = "API token missing"
+
+  return {
+      "filename": file.filename,
+      "format": file.content_type,
+      "size": len(contents),
+      "ai_detection": ai_detection_result,
+  }
+    
