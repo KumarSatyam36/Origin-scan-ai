@@ -1,68 +1,144 @@
-import os
-import httpx
-from fastapi import FastAPI, File, UploadFile, HTTPException
+from io import BytesIO
+from pathlib import Path
+
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from PIL import Image
+from PIL.ExifTags import TAGS
 
-app = FastAPI()
+app = FastAPI(title="OriginScan AI API", version="0.2.0")
 
-# Enable CORS for your GitHub Pages frontend
+# For a public deployment, replace "*" with your exact frontend origin.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
+    allow_credentials=False,
+    allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
 
-# Fetch Sightengine API credentials from environment variables
-SIGHTENGINE_API_USER = os.getenv("SIGHTENGINE_API_USER")
-SIGHTENGINE_API_SECRET = os.getenv("SIGHTENGINE_API_SECRET")
+MAX_BYTES = 25 * 1024 * 1024
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
+VIDEO_EXTENSIONS = {".mp4", ".mov", ".webm", ".m4v"}
+ALLOWED_EXTENSIONS = IMAGE_EXTENSIONS | VIDEO_EXTENSIONS
+
+AI_KEYWORDS = [
+    "midjourney", "dall-e", "dalle", "stable diffusion", "stablediffusion",
+    "firefly", "imagen", "gemini", "flux", "leonardo", "novelai",
+    "comfyui", "automatic1111", "sdxl", "openai", "ai generated",
+]
+
 
 @app.get("/")
-def read_root():
-    return {"status": "ok", "message": "OriginScan AI Backend is running"}
+def root():
+    return {"name": "OriginScan AI API", "status": "starter", "docs": "/docs"}
+
+
+@app.get("/health")
+def health():
+    return {"status": "ok"}
+
+
+def inspect_image(content: bytes):
+    signals = []
+    ai_hits = []
+    has_camera_info = False
+
+    try:
+        img = Image.open(BytesIO(content))
+        signals.append(f"Image format: {img.format}, size {img.width}x{img.height}")
+
+        text_blobs = []
+        exif = img.getexif()
+        exif_map = {}
+        for tag_id, value in exif.items():
+            exif_map[TAGS.get(tag_id, tag_id)] = value
+
+        for key, value in img.info.items():
+            if isinstance(value, (str, bytes)):
+                text = value.decode("utf-8", "ignore") if isinstance(value, bytes) else value
+                text_blobs.append(f"{key} {text}")
+
+        make = exif_map.get("Make")
+        model = exif_map.get("Model")
+        software = exif_map.get("Software")
+        taken = exif_map.get("DateTime")
+
+        if make or model:
+            has_camera_info = True
+            signals.append(f"Camera info found: {make or ''} {model or ''}".strip())
+        else:
+            signals.append("No camera make or model in metadata.")
+
+        if software:
+            signals.append(f"Software tag: {software}")
+            text_blobs.append(str(software))
+        if taken:
+            signals.append(f"Date in metadata: {taken}")
+        if not exif_map:
+            signals.append("No EXIF metadata found (social apps often strip it from real photos too).")
+
+        combined = " ".join(text_blobs).lower()
+        for word in AI_KEYWORDS:
+            if word in combined:
+                ai_hits.append(word)
+
+    except Exception:
+        signals.append("Could not read image metadata.")
+
+    return signals, ai_hits, has_camera_info
+
 
 @app.post("/analyze")
-async def analyze_media(file: UploadFile = File(...)):
-    if not SIGHTENGINE_API_USER or not SIGHTENGINE_API_SECRET:
-        raise HTTPException(
-            status_code=500,
-            detail="API credentials not configured on backend."
-        )
+async def analyze(file: UploadFile = File(...)):
+    filename = file.filename or "upload"
+    ext = Path(filename).suffix.lower()
+    if ext not in ALLOWED_EXTENSIONS:
+        raise HTTPException(status_code=415, detail="Unsupported file type.")
+    content = await file.read(MAX_BYTES + 1)
+    if not content:
+        raise HTTPException(status_code=400, detail="The uploaded file is empty.")
+    if len(content) > MAX_BYTES:
+        raise HTTPException(status_code=413, detail="File exceeds the 25 MB limit.")
 
-    # Read file content from upload
-    file_bytes = await file.read()
+    media_type = "image" if ext in IMAGE_EXTENSIONS else "video"
+    signals = [f"File extension: {ext}", f"Media type: {media_type}"]
 
-    # Call Sightengine Deepfake/AI-generated detection API
-    async with httpx.AsyncClient() as client:
-        try:
-            response = await client.post(
-                "https://api.sightengine.com/1.0/check.json",
-                data={
-                    "models": "genai",  # Checks for AI-generated / deepfake images
-                    "api_user": SIGHTENGINE_API_USER,
-                    "api_secret": SIGHTENGINE_API_SECRET,
-                },
-                files={"media": (file.filename, file_bytes, file.content_type)}
+    if media_type == "image":
+        img_signals, ai_hits, has_camera = inspect_image(content)
+        signals.extend(img_signals)
+
+        if ai_hits:
+            verdict = "AI signs found"
+            summary = (
+                "The file's metadata mentions AI tools: "
+                + ", ".join(sorted(set(ai_hits)))
+                + ". This is a strong clue, but metadata can be edited."
             )
-            data = response.json()
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Error contacting forensic service: {str(e)}")
+        elif has_camera:
+            verdict = "Camera info present"
+            summary = (
+                "The file carries camera details, which is typical of real photos. "
+                "This is a clue, not proof, because metadata can be faked."
+            )
+        else:
+            verdict = "Inconclusive"
+            summary = (
+                "No camera details and no AI tool names were found in the metadata. "
+                "That does not show whether the image is real or AI-generated."
+            )
+    else:
+        verdict = "Inconclusive"
+        summary = "Video analysis is not available yet, only the upload was validated."
 
-    if response.status_code != 200 or data.get("status") != "success":
-        raise HTTPException(status_code=400, detail=data.get("error", {}).get("message", "Analysis failed"))
-
-    # Extract score from Sightengine response
-    # 'genai' score ranges from 0.0 (real) to 1.0 (AI generated)
-    ai_score = data.get("type", {}).get("ai_generated", 0.0)
-    is_ai = ai_score > 0.5
+    signals.append("No pixel-level AI detection model has been run yet.")
 
     return {
-        "is_ai_generated": is_ai,
-        "confidence_score": round(ai_score * 100, 2),
-        "details": {
-            "ai_generated_probability": ai_score,
-            "raw_response": data
-        }
+        "filename": filename,
+        "media_type": media_type,
+        "size_bytes": len(content),
+        "verdict": verdict,
+        "summary": summary,
+        "signals": signals,
+        "confidence": None,
     }
-    
