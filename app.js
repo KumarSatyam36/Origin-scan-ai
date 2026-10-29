@@ -106,4 +106,4 @@ analyze.addEventListener("click", async function () {
         analyze.disabled = !selectedFile;
         analyze.innerHTML = 'Analyze media <span>→</span>';
     }
-});a
+});
